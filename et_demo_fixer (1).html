@@ -1,0 +1,1367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>et_demo_fixer — ET:Legacy demo version patcher</title>
+<style>
+  :root{
+    --bg:#11141a;
+    --panel:#181c24;
+    --panel-2:#1f242e;
+    --border:#2a313c;
+    --text:#e6e2d6;
+    --text-dim:#8b93a1;
+    --accent:#d6a84e;
+    --accent-2:#4fa8ad;
+    --danger:#d9695a;
+    --success:#7cb37c;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, sans-serif;
+  }
+
+  *{ box-sizing:border-box; }
+
+  body{
+    margin:0;
+    min-height:100vh;
+    background:
+      radial-gradient(1200px 600px at 20% -10%, #1c2a2c 0%, transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    padding:48px 20px 80px;
+  }
+
+  .wrap{ max-width:820px; margin:0 auto; }
+
+  header{ margin-bottom:32px; }
+
+  .prompt{
+    font-family:var(--mono);
+    color:var(--accent-2);
+    font-size:13px;
+    letter-spacing:.02em;
+    margin-bottom:10px;
+  }
+  .prompt .cursor{
+    display:inline-block; width:8px; height:14px; background:var(--accent-2);
+    margin-left:2px; vertical-align:-2px;
+    animation:blink 1.1s steps(1) infinite;
+  }
+  @keyframes blink{ 50%{ opacity:0; } }
+
+  h1{
+    font-family:var(--mono);
+    font-size:28px;
+    font-weight:700;
+    margin:0 0 8px;
+    color:var(--text);
+    letter-spacing:-.01em;
+  }
+  h1 .amber{ color:var(--accent); }
+
+  .subtitle{
+    color:var(--text-dim);
+    font-size:14.5px;
+    line-height:1.55;
+    max-width:60ch;
+  }
+  .subtitle code{
+    font-family:var(--mono); font-size:.92em;
+    background:var(--panel-2); border:1px solid var(--border);
+    border-radius:4px; padding:1px 5px;
+  }
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:22px;
+    margin-bottom:20px;
+  }
+
+  .dropzone{
+    border:1.5px dashed var(--border);
+    border-radius:10px;
+    padding:32px 20px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s ease, background .15s ease;
+    background:var(--panel-2);
+  }
+  .dropzone:hover, .dropzone.drag{
+    border-color:var(--accent-2);
+    background:#1c2530;
+  }
+  .dropzone .icon{
+    font-family:var(--mono);
+    font-size:22px;
+    color:var(--accent-2);
+    margin-bottom:10px;
+    letter-spacing:.15em;
+  }
+  .dropzone .label{ font-size:14.5px; color:var(--text); margin-bottom:4px; }
+  .dropzone .hint{ font-size:12.5px; color:var(--text-dim); font-family:var(--mono); }
+  input[type=file]{ display:none; }
+
+  .pick-row{
+    display:flex; gap:10px; justify-content:center; margin-top:16px; flex-wrap:wrap;
+  }
+  .pick-btn{
+    background:var(--panel-2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:9px 16px; font-family:var(--mono); font-size:13px;
+    cursor:pointer; transition:border-color .15s ease;
+  }
+  .pick-btn:hover{ border-color:var(--accent-2); }
+  .pick-btn .k{ color:var(--accent-2); }
+
+  .filerow{
+    display:flex; align-items:center; justify-content:space-between;
+    font-family:var(--mono); font-size:13px; color:var(--text-dim);
+    margin-top:14px;
+  }
+  .filerow .name{ color:var(--text); }
+  .filerow button{
+    background:none; border:1px solid var(--border); color:var(--text-dim);
+    border-radius:6px; padding:4px 10px; font-family:var(--mono); font-size:12px;
+    cursor:pointer;
+  }
+  .filerow button:hover{ border-color:var(--danger); color:var(--danger); }
+
+  .log{
+    font-family:var(--mono);
+    font-size:12.5px;
+    line-height:1.65;
+    background:#0d1015;
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:14px 16px;
+    max-height:240px;
+    overflow-y:auto;
+    white-space:pre-wrap;
+    word-break:break-word;
+    color:#c9d1d9;
+  }
+  .log .l-info{ color:var(--text-dim); }
+  .log .l-ok{ color:var(--success); }
+  .log .l-warn{ color:var(--accent); }
+  .log .l-err{ color:var(--danger); }
+  .log:empty::before{
+    content:"waiting for input...";
+    color:var(--text-dim);
+  }
+
+  .summary-bar{
+    display:flex; align-items:center; justify-content:space-between;
+    flex-wrap:wrap; gap:10px;
+    margin-bottom:14px;
+  }
+  .summary-bar .counts{
+    font-family:var(--mono); font-size:13px; color:var(--text-dim);
+  }
+  .summary-bar .counts b{ color:var(--text); }
+  .summary-bar .counts .n-fixed{ color:var(--success); font-weight:700; }
+  .summary-bar .counts .n-err{ color:var(--danger); font-weight:700; }
+
+  table.results{
+    width:100%;
+    border-collapse:collapse;
+    font-family:var(--mono);
+    font-size:12.5px;
+  }
+  table.results th{
+    text-align:left;
+    color:var(--text-dim);
+    font-weight:600;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    padding:0 10px 8px;
+    border-bottom:1px solid var(--border);
+  }
+  table.results td{
+    padding:9px 10px;
+    border-bottom:1px solid var(--border);
+    vertical-align:middle;
+  }
+  table.results tr:last-child td{ border-bottom:none; }
+  table.results .fname{ color:var(--text); }
+  table.results .fpath{ color:var(--text-dim); font-size:11px; }
+  .badge{
+    display:inline-block; padding:2px 8px; border-radius:20px;
+    font-size:11px; font-weight:700; letter-spacing:.02em;
+  }
+  .badge.fixed{ background:rgba(124,179,124,.15); color:var(--success); }
+  .badge.skip{ background:rgba(139,147,161,.15); color:var(--text-dim); }
+  .badge.err{ background:rgba(217,105,90,.15); color:var(--danger); }
+  .row-dl{
+    background:none; border:1px solid var(--border); color:var(--accent);
+    border-radius:6px; padding:4px 10px; font-family:var(--mono); font-size:12px;
+    cursor:pointer;
+  }
+  .row-dl:hover{ border-color:var(--accent); }
+  .row-diff{ font-size:11.5px; color:var(--text-dim); }
+  .row-diff .before{ color:var(--danger); text-decoration:line-through; }
+  .row-diff .after{ color:var(--success); }
+
+  .actions-row{
+    display:flex; justify-content:flex-end; margin-top:16px;
+  }
+
+  .download-btn{
+    display:inline-flex; align-items:center; gap:8px;
+    background:var(--accent); color:#1a1406;
+    border:none; border-radius:8px;
+    padding:11px 20px;
+    font-family:var(--mono); font-size:14px; font-weight:700;
+    cursor:pointer;
+    transition:filter .15s ease, transform .1s ease;
+  }
+  .download-btn:hover{ filter:brightness(1.08); }
+  .download-btn:active{ transform:translateY(1px); }
+  .download-btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+  footer{
+    margin-top:28px;
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--text-dim);
+    line-height:1.6;
+  }
+  footer a{ color:var(--accent-2); }
+
+  .section-title{
+    font-family:var(--mono);
+    font-size:11.5px;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+    color:var(--text-dim);
+    margin:0 0 12px;
+  }
+
+  #resultsPanel{ display:none; }
+  #resultsPanel.show{ display:block; }
+
+  @media (prefers-reduced-motion: reduce){
+    .prompt .cursor{ animation:none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="prompt">/demo bremen_truckmod<span class="cursor"></span></div>
+    <h1>et_demo<span class="amber">_fixer</span></h1>
+    <p class="subtitle">
+      Fixes ET:Legacy <code>.dm_84</code> demos that crash with <code>bad command byte</code>
+      when the recording server wrote a malformed <code>mod_version</code>
+      (e.g. <code>2.83</code> instead of <code>2.83.2</code>).
+      Runs entirely in your browser — nothing is uploaded anywhere.
+    </p>
+  </header>
+
+  <div class="panel">
+    <p class="section-title">01 · load demos</p>
+    <div class="dropzone" id="dropzone">
+      <div class="icon">▚▞▚</div>
+      <div class="label" id="dz-label">Drop files or a whole folder here</div>
+      <div class="hint">processed locally · works with large files and batches</div>
+    </div>
+    <div class="pick-row">
+      <button class="pick-btn" id="pickFilesBtn"><span class="k">▸</span> choose file(s)</button>
+      <button class="pick-btn" id="pickFolderBtn"><span class="k">▸</span> choose folder</button>
+    </div>
+    <input type="file" id="fileInput" accept=".dm_84,.dm_*" multiple>
+    <input type="file" id="folderInput" webkitdirectory directory multiple>
+    <div class="filerow" id="filerow" style="display:none">
+      <span id="loadSummary"></span>
+      <button id="clearBtn">clear</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="section-title">02 · analysis log</p>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="panel" id="resultsPanel">
+    <p class="section-title">03 · results</p>
+    <div class="summary-bar">
+      <span class="counts" id="summaryCounts"></span>
+    </div>
+    <table class="results" id="resultsTable">
+      <thead>
+        <tr><th>file</th><th>status</th><th>mod_version</th><th></th></tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+    <div class="actions-row">
+      <button class="download-btn" id="downloadAllBtn" disabled>⭳ download all fixed (.zip)</button>
+    </div>
+  </div>
+
+  <footer>
+    Root cause: <code>CG_ParseDemoVersion()</code> in ET:Legacy's cgame calls
+    <code>strtok(versionStr, ".")</code> three times expecting major.minor.patch.
+    A missing part makes the third call return NULL, and
+    <code>Q_atoi(NULL)</code> → <code>strtol(NULL, ...)</code> is undefined
+    behaviour → crash. This tool decodes the demo's adaptive-Huffman-coded
+    gamestate message (a faithful JS port of ET:Legacy's own
+    <code>huffman.c</code> / <code>msg.c</code>), rewrites only the
+    <code>mod_version</code> field, and re-encodes that single frame —
+    the rest of each file is copied through unchanged. Folder mode scans
+    recursively for any <code>.dm_&lt;n&gt;</code> file.<br><br>
+    Source: <a href="https://github.com/etlegacy/etlegacy" target="_blank" rel="noopener">github.com/etlegacy/etlegacy</a> (GPLv3)
+  </footer>
+
+</div>
+
+
+<script>
+"use strict";
+
+/* =========================================================================
+ * et_huffman.js
+ * Faithful JS port of ET:Legacy's adaptive Huffman algorithm (huffman.c).
+ * Translated line-by-line from the C source to guarantee bit-for-bit
+ * compatibility.
+ * ========================================================================= */
+
+const HMAX = 256;
+const NYT = 256;            // Not Yet Transmitted
+const INTERNAL_NODE = 257;
+
+// Equivalent to node_t** (a mutable box holding a pointer to a node).
+class Ref {
+  constructor(node = null) { this.node = node; }
+}
+
+class Node {
+  constructor() {
+    this.left = this.right = this.parent = null;
+    this.next = this.prev = null;
+    this.head = null; // Ref
+    this.weight = 0;
+    this.symbol = 0;
+  }
+}
+
+// Equivalent to huff_t (a single tree: compressor or decompressor).
+class Huff {
+  constructor() {
+    this.tree = null;
+    this.lhead = null;
+    this.ltail = null;
+    this.loc = new Array(HMAX + 1).fill(null);
+    this.freelist = []; // stack of reusable Refs
+  }
+  getPPNode() {
+    if (this.freelist.length) return this.freelist.pop();
+    return new Ref();
+  }
+  freePPNode(ref) {
+    ref.node = null;
+    this.freelist.push(ref);
+  }
+}
+
+function swap(huff, node1, node2) {
+  const par1 = node1.parent;
+  const par2 = node2.parent;
+
+  if (par1) {
+    if (par1.left === node1) par1.left = node2;
+    else par1.right = node2;
+  } else {
+    huff.tree = node2;
+  }
+
+  if (par2) {
+    if (par2.left === node2) par2.left = node1;
+    else par2.right = node1;
+  } else {
+    huff.tree = node1;
+  }
+
+  node1.parent = par2;
+  node2.parent = par1;
+}
+
+function swaplist(node1, node2) {
+  let par1 = node1.next;
+  node1.next = node2.next;
+  node2.next = par1;
+
+  par1 = node1.prev;
+  node1.prev = node2.prev;
+  node2.prev = par1;
+
+  if (node1.next === node1) node1.next = node2;
+  if (node2.next === node2) node2.next = node1;
+  if (node1.next) node1.next.prev = node1;
+  if (node2.next) node2.next.prev = node2;
+  if (node1.prev) node1.prev.next = node1;
+  if (node2.prev) node2.prev.next = node2;
+}
+
+function increment(huff, node) {
+  if (node === null) return;
+
+  if (node.next !== null && node.next.weight === node.weight) {
+    const lnode = node.head.node;
+    if (lnode !== node.parent) swap(huff, lnode, node);
+    swaplist(lnode, node);
+  }
+
+  if (node.prev !== null && node.prev.weight === node.weight) {
+    node.head.node = node.prev;
+  } else {
+    node.head.node = null;
+    huff.freePPNode(node.head);
+  }
+
+  node.weight += 1;
+
+  if (node.next !== null && node.next.weight === node.weight) {
+    node.head = node.next.head;
+  } else {
+    node.head = huff.getPPNode();
+    node.head.node = node;
+  }
+
+  if (node.parent !== null) {
+    increment(huff, node.parent);
+    if (node.prev === node.parent) {
+      swaplist(node, node.parent);
+      if (node.head.node === node) node.head.node = node.parent;
+    }
+  }
+}
+
+function huffAddRef(huff, ch) {
+  if (huff.loc[ch] === null) {
+    const tnode = new Node();
+    const tnode2 = new Node();
+
+    tnode2.symbol = INTERNAL_NODE;
+    tnode2.weight = 1;
+    tnode2.next = huff.lhead.next;
+    if (huff.lhead.next !== null) {
+      huff.lhead.next.prev = tnode2;
+      if (huff.lhead.next.weight === 1) {
+        tnode2.head = huff.lhead.next.head;
+      } else {
+        tnode2.head = huff.getPPNode();
+        tnode2.head.node = tnode2;
+      }
+    } else {
+      tnode2.head = huff.getPPNode();
+      tnode2.head.node = tnode2;
+    }
+    huff.lhead.next = tnode2;
+    tnode2.prev = huff.lhead;
+
+    tnode.symbol = ch;
+    tnode.weight = 1;
+    tnode.next = huff.lhead.next;
+    if (huff.lhead.next !== null) {
+      huff.lhead.next.prev = tnode;
+      if (huff.lhead.next.weight === 1) {
+        tnode.head = huff.lhead.next.head;
+      } else {
+        tnode.head = huff.getPPNode();
+        tnode.head.node = tnode2;
+      }
+    } else {
+      tnode.head = huff.getPPNode();
+      tnode.head.node = tnode;
+    }
+    huff.lhead.next = tnode;
+    tnode.prev = huff.lhead;
+    tnode.left = tnode.right = null;
+
+    if (huff.lhead.parent !== null) {
+      if (huff.lhead.parent.left === huff.lhead) huff.lhead.parent.left = tnode2;
+      else huff.lhead.parent.right = tnode2;
+    } else {
+      huff.tree = tnode2;
+    }
+
+    tnode2.right = tnode;
+    tnode2.left = huff.lhead;
+
+    tnode2.parent = huff.lhead.parent;
+    huff.lhead.parent = tnode.parent = tnode2;
+
+    huff.loc[ch] = tnode;
+
+    increment(huff, tnode2.parent);
+  } else {
+    increment(huff, huff.loc[ch]);
+  }
+}
+
+// Equivalent to half of Huff_Init (a single compressor or decompressor tree).
+function huffInitSingle(huff) {
+  const node = new Node();
+  huff.tree = huff.lhead = huff.ltail = node;
+  huff.loc[NYT] = node;
+  node.symbol = NYT;
+  node.weight = 0;
+  node.next = node.prev = null;
+  node.parent = node.left = node.right = null;
+}
+
+// LSB-first bit reader/writer, matching Huff_getBit/putBit.
+class BitIO {
+  constructor(bytes) {
+    this.data = bytes ? Array.from(bytes) : [];
+    this.bit = 0;
+  }
+  getBit() {
+    const x = this.bit >> 3;
+    const y = this.bit & 7;
+    const t = (this.data[x] >> y) & 0x1;
+    this.bit += 1;
+    return t;
+  }
+  putBit(bit) {
+    const x = this.bit >> 3;
+    const y = this.bit & 7;
+    while (this.data.length <= x) this.data.push(0);
+    if (y === 0) this.data[x] = 0;
+    this.data[x] |= (bit << y);
+    this.bit += 1;
+  }
+}
+
+function huffOffsetReceive(huff, node, bio, maxoffset) {
+  while (node !== null && node.symbol === INTERNAL_NODE) {
+    if (bio.bit >= maxoffset) return 0;
+    node = bio.getBit() ? node.right : node.left;
+  }
+  if (node === null) return 0;
+  return node.symbol;
+}
+
+function huffSend(node, child, bio, maxoffset) {
+  if (node.parent !== null) huffSend(node.parent, node, bio, maxoffset);
+  if (child !== null) {
+    if (bio.bit >= maxoffset) { bio.bit = maxoffset + 1; return; }
+    bio.putBit(node.right === child ? 1 : 0);
+  }
+}
+
+function huffOffsetTransmit(huff, ch, bio, maxoffset) {
+  huffSend(huff.loc[ch], null, bio, maxoffset);
+}
+
+/* =========================================================================
+ * et_msg.js
+ * Port of the MSG_ReadBits/MSG_WriteBits layer from msg.c.
+ * ========================================================================= */
+
+const GENTITYNUM_BITS = 10;
+const FLOAT_INT_BITS = 13;
+
+// Predefined set of node weights for Huffman compression (msg_hData[256] in msg.c).
+const MSG_HDATA = [250315,41193,6292,7106,3730,3750,6110,23283,33317,6950,7838,9714,9257,17259,3949,1778,8288,1604,1590,1663,1100,1213,1238,1134,1749,1059,1246,1149,1273,4486,2805,3472,21819,1159,1670,1066,1043,1012,1053,1070,1726,888,1180,850,960,780,1752,3296,10630,4514,5881,2685,4650,3837,2093,1867,2584,1949,1972,940,1134,1788,1670,1206,5719,6128,7222,6654,3710,3795,1492,1524,2215,1140,1355,971,2180,1248,1328,1195,1770,1078,1264,1266,1168,965,1155,1186,1347,1228,1529,1600,2617,2048,2546,3275,2410,3585,2504,2800,2675,6146,3663,2840,14253,3164,2221,1687,3208,2739,3512,4796,4091,3515,5288,4016,7937,6031,5360,3924,4892,3743,4566,4807,5852,6400,6225,8291,23243,7838,7073,8935,5437,4483,3641,5256,5312,5328,5370,3492,2458,1694,1821,2121,1916,1149,1516,1367,1236,1029,1258,1104,1245,1006,1149,1025,1241,952,1287,997,1713,1009,1187,879,1099,929,1078,951,1656,930,1153,1030,1262,1062,1214,1060,1621,930,1106,912,1034,892,1158,990,1175,850,1121,903,1087,920,1144,1056,3462,2240,4397,12136,7758,1345,1307,3278,1950,886,1023,1112,1077,1042,1061,1071,1484,1001,1096,915,1052,995,1070,876,1111,851,1059,805,1112,923,1103,817,1899,1872,976,841,1127,956,1159,950,7791,954,1289,933,1127,3207,1020,927,1355,768,1040,745,952,805,1073,740,1013,805,1008,796,996,1057,11457,13504];
+
+// Creates a fresh Huffman tree seeded exactly like MSG_initHuffman().
+function newMsgHuff() {
+  const huff = new Huff();
+  huffInitSingle(huff);
+  for (let i = 0; i < 256; i++) {
+    for (let n = 0; n < MSG_HDATA[i]; n++) huffAddRef(huff, i);
+  }
+  return huff;
+}
+
+// Wraps BitIO + a Huffman tree, replicating MSG_ReadBits/MSG_WriteBits
+// (non-oob mode, the one used for network/demo messages).
+class BitStream {
+  constructor(bytes, huff) {
+    this.bio = new BitIO(bytes);
+    this.huff = huff || newMsgHuff();
+  }
+
+  _ensureCapacity(extraBits) {
+    const neededBytes = ((this.bio.bit + extraBits) >> 3) + 2;
+    while (this.bio.data.length < neededBytes) this.bio.data.push(0);
+  }
+
+  readBits(bits) {
+    const signed = bits < 0;
+    if (signed) bits = -bits;
+
+    let value = 0;
+    let nbits = 0;
+    if (bits & 7) {
+      nbits = bits & 7;
+      for (let i = 0; i < nbits; i++) value |= (this.bio.getBit() << i);
+      bits -= nbits;
+    }
+
+    if (bits) {
+      for (let i = 0; i < bits; i += 8) {
+        const get = huffOffsetReceive(this.huff, this.huff.tree, this.bio, this.bio.data.length * 8);
+        value = (value | (get << (i + nbits))) >>> 0;
+      }
+    }
+
+    const totalBits = nbits + bits;
+    if (signed && totalBits > 0 && totalBits < 32) {
+      if (value & (1 << (totalBits - 1))) {
+        value = (value | (-1 ^ ((1 << totalBits) - 1))) | 0;
+      }
+    }
+    return value;
+  }
+
+  writeBits(value, bits) {
+    const signed = bits < 0;
+    if (signed) bits = -bits;
+
+    value = value >>> 0;
+    if (bits < 32) value &= (0xffffffff >>> (32 - bits));
+
+    let nbits = 0;
+    if (bits & 7) {
+      nbits = bits & 7;
+      this._ensureCapacity(nbits);
+      for (let i = 0; i < nbits; i++) {
+        this.bio.putBit(value & 1);
+        value = value >>> 1;
+      }
+      bits -= nbits;
+    }
+
+    if (bits) {
+      for (let i = 0; i < bits; i += 8) {
+        this._ensureCapacity(8);
+        const byteVal = value & 0xff;
+        huffOffsetTransmit(this.huff, byteVal, this.bio, this.bio.data.length * 8);
+        value = value >>> 8;
+      }
+    }
+  }
+
+  // --- high-level helpers, matching MSG_Read*/MSG_Write* ---
+  readByte() { return this.readBits(8) & 0xff; }
+  readShort() {
+    let v = this.readBits(16) & 0xffff;
+    if (v >= 0x8000) v -= 0x10000;
+    return v;
+  }
+  readLong() {
+    let v = this.readBits(32) >>> 0;
+    if (v >= 0x80000000) v -= 0x100000000;
+    return v;
+  }
+  writeByte(v) { this.writeBits(v & 0xff, 8); }
+  writeShort(v) { this.writeBits(v & 0xffff, 16); }
+  writeLong(v) { this.writeBits(v >>> 0, 32); }
+
+  // Reads a null-terminated string byte by byte (like MSG_ReadString/ReadBigString).
+  readStringBytes(maxLen = 8192) {
+    const out = [];
+    while (true) {
+      const c = this.readByte();
+      if (c === 0) break;
+      if (out.length >= maxLen - 1) break;
+      out.push(c);
+    }
+    return new Uint8Array(out);
+  }
+
+  writeStringBytes(bytes) {
+    for (const b of bytes) this.writeByte(b);
+    this.writeByte(0);
+  }
+}
+
+/* =========================================================================
+ * et_entity.js
+ * Port of entityStateFields[] and MSG_ReadDeltaEntity/MSG_WriteDeltaEntity.
+ * We only need to preserve content bit-for-bit (not interpret it), so we
+ * capture the integer values read and write them back identically.
+ * ========================================================================= */
+
+// [name, bits] -- 0 bits means "special float encoding"
+const ENTITY_STATE_FIELDS = [
+  ["eType",8],["eFlags",24],["pos.trType",8],["pos.trTime",32],
+  ["pos.trDuration",32],["pos.trBase0",0],["pos.trBase1",0],["pos.trBase2",0],
+  ["pos.trDelta0",0],["pos.trDelta1",0],["pos.trDelta2",0],
+  ["apos.trType",8],["apos.trTime",32],["apos.trDuration",32],
+  ["apos.trBase0",0],["apos.trBase1",0],["apos.trBase2",0],
+  ["apos.trDelta0",0],["apos.trDelta1",0],["apos.trDelta2",0],
+  ["time",32],["time2",32],
+  ["origin0",0],["origin1",0],["origin2",0],
+  ["origin20",0],["origin21",0],["origin22",0],
+  ["angles0",0],["angles1",0],["angles2",0],
+  ["angles20",0],["angles21",0],["angles22",0],
+  ["otherEntityNum",GENTITYNUM_BITS],["otherEntityNum2",GENTITYNUM_BITS],
+  ["groundEntityNum",GENTITYNUM_BITS],
+  ["loopSound",8],["constantLight",32],["dl_intensity",32],
+  ["modelindex",9],["modelindex2",9],["frame",16],["clientNum",8],
+  ["solid",24],["event",10],["eventParm",8],["eventSequence",8],
+  ["events0",8],["events1",8],["events2",8],["events3",8],
+  ["eventParms0",8],["eventParms1",8],["eventParms2",8],["eventParms3",8],
+  ["powerups",16],["weapon",8],["legsAnim",10],["torsoAnim",10],
+  ["density",10],["dmgFlags",32],["onFireStart",32],["onFireEnd",32],
+  ["nextWeapon",8],["teamNum",8],
+  ["effect1Time",32],["effect2Time",32],["effect3Time",32],
+  ["animMovetype",4],["aiState",2],
+];
+const NUM_ENTITY_FIELDS = ENTITY_STATE_FIELDS.length;
+
+// Reads an svc_baseline (the entity-number bit must already have been read
+// before calling this). Returns a list of events describing exactly what
+// was read, bit by bit, so it can be re-written identically.
+function readDeltaEntity(bs) {
+  const events = [["bit", bs.readBits(1)]]; // "remove"
+  if (events[events.length - 1][1] === 1) return events;
+
+  events.push(["bit", bs.readBits(1)]); // "no delta"
+  if (events[events.length - 1][1] === 0) return events;
+
+  const lc = bs.readByte();
+  events.push(["byte", lc]);
+
+  if (lc > NUM_ENTITY_FIELDS || lc < 0) {
+    throw new Error(`invalid entityState field count: ${lc}`);
+  }
+
+  for (let i = 0; i < lc; i++) {
+    const fbits = ENTITY_STATE_FIELDS[i][1];
+    const changed = bs.readBits(1);
+    events.push(["bit", changed]);
+    if (changed) {
+      if (fbits === 0) {
+        const nonzero = bs.readBits(1);
+        events.push(["bit", nonzero]);
+        if (nonzero) {
+          const isInt = bs.readBits(1);
+          events.push(["bit", isInt]);
+          if (isInt === 0) {
+            const trunc = bs.readBits(FLOAT_INT_BITS);
+            events.push(["bits", FLOAT_INT_BITS, trunc]);
+          } else {
+            const full = bs.readBits(32);
+            events.push(["bits", 32, full]);
+          }
+        }
+      } else {
+        const nonzero = bs.readBits(1);
+        events.push(["bit", nonzero]);
+        if (nonzero) {
+          const val = bs.readBits(fbits);
+          events.push(["bits", fbits, val]);
+        }
+      }
+    }
+  }
+  return events;
+}
+
+function writeDeltaEntity(bs, events) {
+  let idx = 0;
+  const nextEv = () => events[idx++];
+
+  let ev = nextEv();
+  bs.writeBits(ev[1], 1);
+  if (ev[1] === 1) return;
+
+  ev = nextEv();
+  bs.writeBits(ev[1], 1);
+  if (ev[1] === 0) return;
+
+  ev = nextEv();
+  const lc = ev[1];
+  bs.writeByte(lc);
+
+  for (let i = 0; i < lc; i++) {
+    const fbits = ENTITY_STATE_FIELDS[i][1];
+    ev = nextEv();
+    const changed = ev[1];
+    bs.writeBits(changed, 1);
+    if (changed) {
+      if (fbits === 0) {
+        ev = nextEv();
+        const nonzero = ev[1];
+        bs.writeBits(nonzero, 1);
+        if (nonzero) {
+          ev = nextEv();
+          const isInt = ev[1];
+          bs.writeBits(isInt, 1);
+          if (isInt === 0) {
+            ev = nextEv();
+            bs.writeBits(ev[2], FLOAT_INT_BITS);
+          } else {
+            ev = nextEv();
+            bs.writeBits(ev[2], 32);
+          }
+        }
+      } else {
+        ev = nextEv();
+        const nonzero = ev[1];
+        bs.writeBits(nonzero, 1);
+        if (nonzero) {
+          ev = nextEv();
+          bs.writeBits(ev[2], fbits);
+        }
+      }
+    }
+  }
+}
+
+/* =========================================================================
+ * fix_et_demo.js
+ * Decodes the gamestate message, fixes mod_version, re-encodes.
+ * ========================================================================= */
+
+const SVC_EOF = 8;
+const SVC_CONFIGSTRING = 3;
+const SVC_BASELINE = 4;
+const CS_SERVERINFO = 0;
+
+function decodeGamestate(msgBytes) {
+  const bs = new BitStream(msgBytes);
+  const events = [];
+
+  events.push(["long", bs.readLong()]); // reliableAcknowledge
+
+  const cmd = bs.readByte();
+  events.push(["byte", cmd]);
+  if (cmd !== 2) { // svc_gamestate
+    throw new Error(`First message is not svc_gamestate (cmd=${cmd}); this demo might use a different format than expected.`);
+  }
+
+  events.push(["long", bs.readLong()]); // serverCommandSequence
+
+  const configstrings = [];
+
+  while (true) {
+    const cmd2 = bs.readByte();
+    events.push(["byte", cmd2]);
+    if (cmd2 === SVC_EOF) {
+      break;
+    } else if (cmd2 === SVC_CONFIGSTRING) {
+      const csnum = bs.readShort();
+      events.push(["short", csnum]);
+      const cs = bs.readStringBytes();
+      events.push(["string", cs]);
+      configstrings.push([events.length - 1, csnum, cs]);
+    } else if (cmd2 === SVC_BASELINE) {
+      const entnum = bs.readBits(GENTITYNUM_BITS);
+      events.push(["bits", GENTITYNUM_BITS, entnum]);
+      const entEvents = readDeltaEntity(bs);
+      events.push(["entity", entEvents]);
+    } else {
+      throw new Error(
+        `Unexpected command byte (${cmd2}) while decoding the gamestate. ` +
+        `This indicates a bit-level desync: the demo may use entity fields ` +
+        `that differ from official ET:Legacy (a real protocol incompatibility, ` +
+        `not just a version-string issue).`
+      );
+    }
+  }
+
+  events.push(["long", bs.readLong()]);  // clientNum
+  events.push(["long", bs.readLong()]);  // checksumFeed
+  events.push(["byte", bs.readByte()]);  // final svc_EOF
+
+  return { events, configstrings };
+}
+
+function encodeGamestate(events) {
+  const bs = new BitStream(new Uint8Array(0));
+  for (const ev of events) {
+    const kind = ev[0];
+    if (kind === "long") bs.writeLong(ev[1]);
+    else if (kind === "byte") bs.writeByte(ev[1]);
+    else if (kind === "short") bs.writeShort(ev[1]);
+    else if (kind === "string") bs.writeStringBytes(ev[1]);
+    else if (kind === "bits") bs.writeBits(ev[2], ev[1]);
+    else if (kind === "entity") writeDeltaEntity(bs, ev[1]);
+    else throw new Error(`Unknown event type: ${kind}`);
+  }
+  const nbytes = (bs.bio.bit + 7) >> 3;
+  return new Uint8Array(bs.bio.data.slice(0, nbytes));
+}
+
+function bytesToLatin1(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return s;
+}
+function latin1ToBytes(str) {
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+  return out;
+}
+
+// If mod_version doesn't have 3 numeric parts (major.minor.patch), pad
+// the missing ones with "0". Returns {newCs, changed, info}.
+function fixModVersion(csBytes) {
+  const cs = bytesToLatin1(csBytes);
+  const key = "\\mod_version\\";
+  const idx = cs.indexOf(key);
+  if (idx === -1) return { newCs: csBytes, changed: false, info: "no mod_version key found" };
+
+  const start = idx + key.length;
+  let end = cs.indexOf("\\", start);
+  if (end === -1) end = cs.length;
+  const oldVal = cs.slice(start, end);
+
+  const stripped = oldVal.replace(/^[vV]/, "");
+  const parts = stripped.split(".");
+
+  const isAllDigits = (s) => /^[0-9]+$/.test(s);
+
+  if (parts.length >= 3 && isAllDigits(parts[0]) && isAllDigits(parts[1]) && isAllDigits(parts[2])) {
+    return { newCs: csBytes, changed: false, info: `mod_version already valid: "${oldVal}"` };
+  }
+
+  const numericParts = parts.filter(isAllDigits);
+  while (numericParts.length < 3) numericParts.push("0");
+  const newVal = numericParts.slice(0, 3).join(".");
+
+  const newCsStr = cs.slice(0, start) + newVal + cs.slice(end);
+  return { newCs: latin1ToBytes(newCsStr), changed: true, info: `"${oldVal}" -> "${newVal}"`, oldVal, newVal };
+}
+
+function patchEvents(events, configstrings, log) {
+  let changed = false;
+  let diffInfo = null;
+  for (const [pos, csnum, cs] of configstrings) {
+    if (csnum === CS_SERVERINFO) {
+      const { newCs, changed: didChange, info, oldVal, newVal } = fixModVersion(cs);
+      log(`cs[${csnum}] (CS_SERVERINFO): ${info}`, didChange ? "warn" : "info");
+      if (didChange) {
+        events[pos] = ["string", newCs];
+        changed = true;
+        diffInfo = { oldVal, newVal };
+      }
+    }
+  }
+  return { changed, diffInfo };
+}
+
+// Reads a little-endian int32 from a DataView.
+function readI32LE(view, offset) { return view.getInt32(offset, true); }
+
+async function fixDemoFile(file, log) {
+  const headerBuf = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  if (headerBuf.length < 8) throw new Error("File is too small / corrupted.");
+  const headerView = new DataView(headerBuf.buffer);
+  const seq = readI32LE(headerView, 0);
+  const length = readI32LE(headerView, 4);
+  if (length <= 0 || length > 10_000_000) {
+    throw new Error(`Suspicious first-message length: ${length}`);
+  }
+
+  const msgBuf = new Uint8Array(await file.slice(8, 8 + length).arrayBuffer());
+  const restStart = 8 + length;
+
+  log(`Analyzing '${file.name}' (${file.size.toLocaleString()} bytes) ...`, "info");
+  const { events, configstrings } = decodeGamestate(msgBuf);
+
+  log("Configstrings of interest found:", "info");
+  const { changed, diffInfo } = patchEvents(events, configstrings, log);
+
+  if (!changed) {
+    log("No mod_version formatting issue detected.", "info");
+    log("If the demo still crashes, the cause is something else (not the version string).", "warn");
+    return { changed: false };
+  }
+
+  const newMsgBytes = encodeGamestate(events);
+
+  // Sanity check: re-decode what we're about to produce, to catch any
+  // encoding bug before offering the file for download.
+  decodeGamestate(newMsgBytes);
+  log("Round-trip verification of the patched frame: OK.", "ok");
+
+  const newHeader = new Uint8Array(8);
+  const newHeaderView = new DataView(newHeader.buffer);
+  newHeaderView.setInt32(0, seq, true);
+  newHeaderView.setInt32(4, newMsgBytes.length, true);
+
+  // Efficient assembly: the untouched remainder of the file is referenced
+  // via Blob.slice (no need to read it into JS memory), so this scales
+  // fine to large demos.
+  const restBlob = file.slice(restStart);
+  const outBlob = new Blob([newHeader, newMsgBytes, restBlob], { type: "application/octet-stream" });
+
+  log(`Original frame 0: ${length} bytes -> new: ${newMsgBytes.length} bytes`, "info");
+  log("Done. Fixed demo ready for download.", "ok");
+
+  return { changed: true, blob: outBlob, diffInfo };
+}
+
+
+/* =========================================================================
+ * Minimal ZIP writer (store method, no compression), so "download all" can
+ * work without any external library. Produces a standard ZIP readable by
+ * any tool.
+ * ========================================================================= */
+
+function makeCrcTable() {
+  const table = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+}
+const CRC_TABLE = makeCrcTable();
+
+function crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+// entries: [{ name: string, data: Uint8Array }]
+function makeZip(entries) {
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const dosTime = 0, dosDate = 0x21; // 1980-01-01 (minimum valid DOS date)
+
+  for (const { name, data } of entries) {
+    const nameBytes = encoder.encode(name.replace(/\\/g, "/"));
+    const crc = crc32(data);
+    const size = data.length;
+
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0, true);
+    lv.setUint16(8, 0, true);
+    lv.setUint16(10, dosTime, true);
+    lv.setUint16(12, dosDate, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, size, true);
+    lv.setUint32(22, size, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    localParts.push(local, data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, dosTime, true);
+    cv.setUint16(14, dosDate, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    centralParts.push(central);
+
+    offset += local.length + data.length;
+  }
+
+  const centralSize = centralParts.reduce((a, b) => a + b.length, 0);
+  const centralOffset = offset;
+
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, entries.length, true);
+  ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, centralOffset, true);
+  ev.setUint16(20, 0, true);
+
+  return new Blob([...localParts, ...centralParts, eocd], { type: "application/zip" });
+}
+
+/* =========================================================================
+ * File / folder gathering
+ * ========================================================================= */
+
+const DEMO_NAME_RE = /\.dm_\d+$/i;
+function isDemoFile(name) { return DEMO_NAME_RE.test(name); }
+
+// FileList (from <input type=file multiple> or webkitdirectory) -> items
+function itemsFromFileList(fileList) {
+  return Array.from(fileList).map(file => ({
+    file,
+    relPath: file.webkitRelativePath || file.name,
+  }));
+}
+
+// Recursively reads a dropped FileSystemDirectoryEntry.
+function readAllEntries(reader) {
+  return new Promise((resolve, reject) => {
+    let all = [];
+    (function readBatch() {
+      reader.readEntries((batch) => {
+        if (!batch.length) { resolve(all); return; }
+        all = all.concat(batch);
+        readBatch();
+      }, reject);
+    })();
+  });
+}
+
+async function traverseEntry(entry, prefix) {
+  if (entry.isFile) {
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    return [{ file, relPath: prefix + entry.name }];
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const children = await readAllEntries(reader);
+    let out = [];
+    for (const child of children) {
+      out = out.concat(await traverseEntry(child, prefix + entry.name + "/"));
+    }
+    return out;
+  }
+  return [];
+}
+
+// Handles both dropped files and dropped folders (webkitGetAsEntry).
+async function itemsFromDataTransfer(dt) {
+  const items = dt.items;
+  if (items && items.length && typeof items[0].webkitGetAsEntry === "function") {
+    const entries = [];
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry();
+      if (entry) entries.push(entry);
+    }
+    let out = [];
+    for (const entry of entries) out = out.concat(await traverseEntry(entry, ""));
+    return out;
+  }
+  return itemsFromFileList(dt.files);
+}
+
+function makeFixedName(relPath) {
+  const parts = relPath.split(/[\\/]/);
+  const base = parts.pop();
+  const m = base.match(/^(.*)(\.dm_\d+)$/i);
+  parts.push(m ? `${m[1]}_fixed${m[2]}` : `${base}_fixed`);
+  return parts.join("/");
+}
+
+/* =========================================================================
+ * UI wiring
+ * ========================================================================= */
+
+const dropzone = document.getElementById("dropzone");
+const dzLabel = document.getElementById("dz-label");
+const fileInput = document.getElementById("fileInput");
+const folderInput = document.getElementById("folderInput");
+const pickFilesBtn = document.getElementById("pickFilesBtn");
+const pickFolderBtn = document.getElementById("pickFolderBtn");
+const filerow = document.getElementById("filerow");
+const loadSummary = document.getElementById("loadSummary");
+const clearBtn = document.getElementById("clearBtn");
+const logEl = document.getElementById("log");
+const resultsPanel = document.getElementById("resultsPanel");
+const resultsBody = document.getElementById("resultsBody");
+const summaryCounts = document.getElementById("summaryCounts");
+const downloadAllBtn = document.getElementById("downloadAllBtn");
+
+function log(msg, level = "info") {
+  const line = document.createElement("div");
+  line.className = "l-" + level;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function resetUI() {
+  logEl.innerHTML = "";
+  resultsPanel.classList.remove("show");
+  resultsBody.innerHTML = "";
+  summaryCounts.textContent = "";
+  downloadAllBtn.disabled = true;
+  downloadAllBtn.onclick = null;
+}
+
+function humanSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+}
+
+function triggerDownload(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function addResultRow({ relPath, status, diffInfo, blob, outName, errorMsg }) {
+  const tr = document.createElement("tr");
+
+  const tdName = document.createElement("td");
+  const parts = relPath.split(/[\\/]/);
+  const base = parts.pop();
+  tdName.innerHTML = `<div class="fname">${base}</div>` +
+    (parts.length ? `<div class="fpath">${parts.join("/")}/</div>` : "");
+  tr.appendChild(tdName);
+
+  const tdStatus = document.createElement("td");
+  if (status === "fixed") {
+    tdStatus.innerHTML = `<span class="badge fixed">fixed</span>`;
+  } else if (status === "skip") {
+    tdStatus.innerHTML = `<span class="badge skip">already valid</span>`;
+  } else {
+    tdStatus.innerHTML = `<span class="badge err">error</span>`;
+  }
+  tr.appendChild(tdStatus);
+
+  const tdDiff = document.createElement("td");
+  if (diffInfo) {
+    tdDiff.innerHTML = `<span class="row-diff"><span class="before">${diffInfo.oldVal}</span> → <span class="after">${diffInfo.newVal}</span></span>`;
+  } else if (errorMsg) {
+    tdDiff.innerHTML = `<span class="row-diff">${errorMsg}</span>`;
+  } else {
+    tdDiff.textContent = "—";
+  }
+  tr.appendChild(tdDiff);
+
+  const tdAction = document.createElement("td");
+  if (status === "fixed" && blob) {
+    const btn = document.createElement("button");
+    btn.className = "row-dl";
+    btn.textContent = "⭳";
+    btn.title = "download this file";
+    btn.addEventListener("click", () => triggerDownload(blob, outName.split(/[\\/]/).pop()));
+    tdAction.appendChild(btn);
+  }
+  tr.appendChild(tdAction);
+
+  resultsBody.appendChild(tr);
+}
+
+async function processItems(items) {
+  resetUI();
+
+  const demoItems = items.filter(it => isDemoFile(it.file.name));
+  loadSummary.textContent =
+    `${items.length} file(s) scanned — ${demoItems.length} demo(s) matched (.dm_<n>)`;
+  filerow.style.display = "flex";
+
+  if (!demoItems.length) {
+    log("No .dm_<n> files found in the selection.", "warn");
+    return;
+  }
+
+  resultsPanel.classList.add("show");
+
+  let fixedCount = 0, skipCount = 0, errCount = 0;
+  const zipEntries = [];
+
+  for (const item of demoItems) {
+    log(`--- ${item.relPath} ---`, "info");
+    try {
+      const result = await fixDemoFile(item.file, log);
+      if (result.changed) {
+        fixedCount++;
+        const buf = new Uint8Array(await result.blob.arrayBuffer());
+        const outName = makeFixedName(item.relPath);
+        zipEntries.push({ name: outName, data: buf });
+        addResultRow({ relPath: item.relPath, status: "fixed", diffInfo: result.diffInfo, blob: result.blob, outName });
+      } else {
+        skipCount++;
+        addResultRow({ relPath: item.relPath, status: "skip" });
+      }
+    } catch (err) {
+      errCount++;
+      const msg = String(err && err.message ? err.message : err);
+      log(msg, "err");
+      addResultRow({ relPath: item.relPath, status: "err", errorMsg: msg });
+    }
+  }
+
+  summaryCounts.innerHTML =
+    `<b>${demoItems.length}</b> demo(s) processed — ` +
+    `<span class="n-fixed">${fixedCount} fixed</span>, ` +
+    `${skipCount} already valid, ` +
+    `<span class="n-err">${errCount} error(s)</span>`;
+
+  if (zipEntries.length) {
+    downloadAllBtn.disabled = false;
+    downloadAllBtn.textContent =
+      zipEntries.length === 1 ? "⭳ download fixed demo" : `⭳ download all fixed (${zipEntries.length}) as .zip`;
+    downloadAllBtn.onclick = () => {
+      if (zipEntries.length === 1) {
+        triggerDownload(new Blob([zipEntries[0].data]), zipEntries[0].name.split(/[\\/]/).pop());
+      } else {
+        triggerDownload(makeZip(zipEntries), "et_demo_fixer_output.zip");
+      }
+    };
+  }
+}
+
+pickFilesBtn.addEventListener("click", () => fileInput.click());
+pickFolderBtn.addEventListener("click", () => folderInput.click());
+
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) processItems(itemsFromFileList(fileInput.files));
+});
+folderInput.addEventListener("change", () => {
+  if (folderInput.files.length) processItems(itemsFromFileList(folderInput.files));
+});
+
+clearBtn.addEventListener("click", () => {
+  fileInput.value = "";
+  folderInput.value = "";
+  filerow.style.display = "none";
+  resetUI();
+});
+
+dropzone.addEventListener("click", () => fileInput.click());
+
+["dragenter", "dragover"].forEach(evt => {
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.add("drag");
+  });
+});
+["dragleave", "drop"].forEach(evt => {
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("drag");
+  });
+});
+dropzone.addEventListener("drop", async (e) => {
+  const items = await itemsFromDataTransfer(e.dataTransfer);
+  if (items.length) processItems(items);
+});
+
+</script>
+</body>
+</html>
