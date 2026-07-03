@@ -307,16 +307,12 @@
     <code>strtok(versionStr, ".")</code> three times expecting major.minor.patch.
     A missing part makes the third call return NULL, and
     <code>Q_atoi(NULL)</code> → <code>strtol(NULL, ...)</code> is undefined
-    behaviour → crash. <code>CG_ParseDemoVersion()</code> re-runs every time
-    a new gamestate is processed — not just at the start — because servers
-    commonly resend a full gamestate mid-demo (e.g. via <code>map_restart</code>
-    when warmup ends). This tool decodes the demo's adaptive-Huffman-coded
-    messages (a faithful JS port of ET:Legacy's own
-    <code>huffman.c</code> / <code>msg.c</code>), scans <b>every</b> frame
-    of the file for <code>svc_gamestate</code> messages, and rewrites
-    <code>mod_version</code> in all of them — everything else is copied
-    through unchanged. Folder mode scans recursively for any
-    <code>.dm_&lt;n&gt;</code> file.<br><br>
+    behaviour → crash. This tool decodes the demo's adaptive-Huffman-coded
+    gamestate message (a faithful JS port of ET:Legacy's own
+    <code>huffman.c</code> / <code>msg.c</code>), rewrites only the
+    <code>mod_version</code> field, and re-encodes that single frame —
+    the rest of each file is copied through unchanged. Folder mode scans
+    recursively for any <code>.dm_&lt;n&gt;</code> file.<br><br>
     Source: <a href="https://github.com/etlegacy/etlegacy" target="_blank" rel="noopener">github.com/etlegacy/etlegacy</a> (GPLv3)
   </footer>
 
@@ -835,44 +831,285 @@ function writeDeltaEntity(bs, events) {
 }
 
 /* =========================================================================
- * fix_et_demo.js
- * Decodes the gamestate message, fixes mod_version, re-encodes.
+ * et_playerstate.js
+ * Port of MSG_ReadDeltaPlayerstate/MSG_WriteDeltaPlayerstate from msg.c
+ * (playerStateFields[] table + array reads for stats/persistant/
+ * holdable/powerups/ammo/ammoclip). Needed to walk svc_snapshot messages
+ * so we can find and patch things that appear AFTER them in the same
+ * frame (in practice, nothing does -- see fastScanFrame below -- but the
+ * codec still needs to be able to skip a snapshot correctly when a
+ * frame does need patching).
  * ========================================================================= */
 
-const SVC_GAMESTATE = 2;
-const SVC_EOF = 8;
-const SVC_CONFIGSTRING = 3;
-const SVC_BASELINE = 4;
-const CS_SERVERINFO = 0;
+const ANIM_BITS = 10;
 
-// Cheaply decodes just [reliableAcknowledge][cmd] from a message, without
-// parsing the rest. Used to identify which frames are svc_gamestate
-// messages worth fully decoding.
-function peekCmd(msgBytes) {
-  const bs = new BitStream(msgBytes);
-  bs.readLong();       // reliableAcknowledge
-  return bs.readByte();
+// Reads a little-endian int32 from a DataView.
+function readI32LE(view, offset) { return view.getInt32(offset, true); }
+
+function bytesToLatin1(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return s;
+}
+function latin1ToBytes(str) {
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+  return out;
 }
 
-// Decodes a full svc_gamestate message (as found in ANY frame of the
-// demo, not just the first one -- servers resend a full gamestate on
-// things like map_restart, e.g. when warmup ends) into a list of events.
-function decodeGamestate(msgBytes) {
-  const bs = new BitStream(msgBytes);
+
+// [name, bits] -- 0 means "special float", negative means signed integer
+const PLAYER_STATE_FIELDS = [
+  ["commandTime",32],["pm_type",8],["bobCycle",8],["pm_flags",16],["pm_time",-16],
+  ["origin0",0],["origin1",0],["origin2",0],
+  ["velocity0",0],["velocity1",0],["velocity2",0],
+  ["weaponTime",-16],["weaponDelay",-16],["grenadeTimeLeft",-16],
+  ["gravity",16],["leanf",0],["speed",16],
+  ["delta_angles0",16],["delta_angles1",16],["delta_angles2",16],
+  ["groundEntityNum",GENTITYNUM_BITS],
+  ["legsTimer",16],["torsoTimer",16],
+  ["legsAnim",ANIM_BITS],["torsoAnim",ANIM_BITS],
+  ["movementDir",8],["eFlags",24],["eventSequence",8],
+  ["events0",8],["events1",8],["events2",8],["events3",8],
+  ["eventParms0",8],["eventParms1",8],["eventParms2",8],["eventParms3",8],
+  ["clientNum",8],
+  ["weapons0",32],["weapons1",32],
+  ["weapon",7],["weaponstate",4],["weapAnim",10],
+  ["viewangles0",0],["viewangles1",0],["viewangles2",0],
+  ["viewheight",-8],
+  ["damageEvent",8],["damageYaw",8],["damagePitch",8],["damageCount",8],
+  ["mins0",0],["mins1",0],["mins2",0],
+  ["maxs0",0],["maxs1",0],["maxs2",0],
+  ["crouchMaxZ",0],["crouchViewHeight",0],["standViewHeight",0],
+  ["deadViewHeight",0],["runSpeedScale",0],["sprintSpeedScale",0],
+  ["crouchSpeedScale",0],["friction",0],
+  ["viewlocked",8],["viewlocked_entNum",16],
+  ["nextWeapon",8],["teamNum",8],
+  ["onFireStart",32],["curWeapHeat",8],["aimSpreadScale",8],
+  ["serverCursorHint",8],["serverCursorHintVal",8],
+  ["classWeaponTime",32],["identifyClient",8],["identifyClientHealth",8],
+  ["aiState",2],
+];
+const NUM_PS_FIELDS = PLAYER_STATE_FIELDS.length;
+
+const MAX_STATS = 16, MAX_PERSISTANT = 16, MAX_HOLDABLE = 16, MAX_POWERUPS = 16;
+
+function readDeltaPlayerstate(bs) {
   const events = [];
+  const lc = bs.readByte();
+  events.push(["byte", lc]);
+  if (lc > NUM_PS_FIELDS || lc < 0) throw new Error(`invalid playerState field count: ${lc}`);
 
-  events.push(["long", bs.readLong()]); // reliableAcknowledge
-
-  const cmd = bs.readByte();
-  events.push(["byte", cmd]);
-  if (cmd !== SVC_GAMESTATE) {
-    throw new Error(`Message is not svc_gamestate (cmd=${cmd}); this demo might use a different format than expected.`);
+  for (let i = 0; i < lc; i++) {
+    const fbits = PLAYER_STATE_FIELDS[i][1];
+    const changed = bs.readBits(1);
+    events.push(["bit", changed]);
+    if (changed) {
+      if (fbits === 0) {
+        const isInt = bs.readBits(1);
+        events.push(["bit", isInt]);
+        if (isInt === 0) {
+          const trunc = bs.readBits(FLOAT_INT_BITS);
+          events.push(["bits", FLOAT_INT_BITS, trunc]);
+        } else {
+          const full = bs.readBits(32);
+          events.push(["bits", 32, full]);
+        }
+      } else {
+        const val = bs.readBits(fbits);
+        events.push(["bits", fbits, val]);
+      }
+    }
   }
 
-  events.push(["long", bs.readLong()]); // serverCommandSequence
+  const anyArrays = bs.readBits(1);
+  events.push(["bit", anyArrays]);
+  if (anyArrays) {
+    for (const [maxCount, tagname] of [[MAX_STATS,"stats"],[MAX_PERSISTANT,"persistant"],[MAX_HOLDABLE,"holdable"],[MAX_POWERUPS,"powerups"]]) {
+      const hasIt = bs.readBits(1);
+      events.push(["bit", hasIt]);
+      if (hasIt) {
+        const mask = bs.readShort();
+        events.push(["short", mask]);
+        for (let i = 0; i < maxCount; i++) {
+          if (mask & (1 << i)) {
+            if (tagname === "powerups") { const v = bs.readLong(); events.push(["long", v]); }
+            else { const v = bs.readShort(); events.push(["short", v]); }
+          }
+        }
+      }
+    }
+  }
 
+  const anyAmmo = bs.readBits(1);
+  events.push(["bit", anyAmmo]);
+  if (anyAmmo) {
+    for (let j = 0; j < 4; j++) {
+      const hasIt = bs.readBits(1);
+      events.push(["bit", hasIt]);
+      if (hasIt) {
+        const mask = bs.readShort();
+        events.push(["short", mask]);
+        for (let i = 0; i < 16; i++) {
+          if (mask & (1 << i)) { const v = bs.readShort(); events.push(["short", v]); }
+        }
+      }
+    }
+  }
+
+  for (let j = 0; j < 4; j++) {
+    const hasIt = bs.readBits(1);
+    events.push(["bit", hasIt]);
+    if (hasIt) {
+      const mask = bs.readShort();
+      events.push(["short", mask]);
+      for (let i = 0; i < 16; i++) {
+        if (mask & (1 << i)) { const v = bs.readShort(); events.push(["short", v]); }
+      }
+    }
+  }
+
+  return events;
+}
+
+function writeDeltaPlayerstate(bs, events) {
+  let idx = 0;
+  const nextEv = () => events[idx++];
+
+  let ev = nextEv();
+  const lc = ev[1];
+  bs.writeByte(lc);
+
+  for (let i = 0; i < lc; i++) {
+    const fbits = PLAYER_STATE_FIELDS[i][1];
+    ev = nextEv();
+    const changed = ev[1];
+    bs.writeBits(changed, 1);
+    if (changed) {
+      if (fbits === 0) {
+        ev = nextEv();
+        const isInt = ev[1];
+        bs.writeBits(isInt, 1);
+        if (isInt === 0) { ev = nextEv(); bs.writeBits(ev[2], FLOAT_INT_BITS); }
+        else { ev = nextEv(); bs.writeBits(ev[2], 32); }
+      } else {
+        ev = nextEv();
+        bs.writeBits(ev[2], fbits);
+      }
+    }
+  }
+
+  ev = nextEv();
+  const anyArrays = ev[1];
+  bs.writeBits(anyArrays, 1);
+  if (anyArrays) {
+    for (const [maxCount, tagname] of [[MAX_STATS,"stats"],[MAX_PERSISTANT,"persistant"],[MAX_HOLDABLE,"holdable"],[MAX_POWERUPS,"powerups"]]) {
+      ev = nextEv();
+      const hasIt = ev[1];
+      bs.writeBits(hasIt, 1);
+      if (hasIt) {
+        ev = nextEv();
+        const mask = ev[1];
+        bs.writeShort(mask);
+        for (let i = 0; i < maxCount; i++) {
+          if (mask & (1 << i)) {
+            ev = nextEv();
+            if (tagname === "powerups") bs.writeLong(ev[1]); else bs.writeShort(ev[1]);
+          }
+        }
+      }
+    }
+  }
+
+  ev = nextEv();
+  const anyAmmo = ev[1];
+  bs.writeBits(anyAmmo, 1);
+  if (anyAmmo) {
+    for (let j = 0; j < 4; j++) {
+      ev = nextEv();
+      const hasIt = ev[1];
+      bs.writeBits(hasIt, 1);
+      if (hasIt) {
+        ev = nextEv();
+        const mask = ev[1];
+        bs.writeShort(mask);
+        for (let i = 0; i < 16; i++) {
+          if (mask & (1 << i)) { ev = nextEv(); bs.writeShort(ev[1]); }
+        }
+      }
+    }
+  }
+
+  for (let j = 0; j < 4; j++) {
+    ev = nextEv();
+    const hasIt = ev[1];
+    bs.writeBits(hasIt, 1);
+    if (hasIt) {
+      ev = nextEv();
+      const mask = ev[1];
+      bs.writeShort(mask);
+      for (let i = 0; i < 16; i++) {
+        if (mask & (1 << i)) { ev = nextEv(); bs.writeShort(ev[1]); }
+      }
+    }
+  }
+}
+
+/* =========================================================================
+ * et_message.js
+ * Generic decode/encode for ANY frame (not just gamestates): nop,
+ * serverCommand, gamestate, snapshot. Used to find and fix mod_version
+ * wherever it appears -- the initial gamestate's own CS_SERVERINFO, and
+ * any later "cs 0 ..." command that re-broadcasts it (servers commonly
+ * do this on map_restart / warmup-to-match transitions).
+ * ========================================================================= */
+
+const SVC_NOP = 1;
+const SVC_GAMESTATE = 2;
+const SVC_CONFIGSTRING = 3;
+const SVC_BASELINE = 4;
+const SVC_SERVERCOMMAND = 5;
+const SVC_DOWNLOAD = 6;
+const SVC_SNAPSHOT = 7;
+const SVC_EOF = 8;
+const CS_SERVERINFO = 0;
+const MAX_GENTITIES_MINUS_1 = 1023;
+
+const TARGET_MOD_VERSION_SUFFIX = ".2";
+
+// If mod_version doesn't have 3 clean numeric parts (major.minor.patch),
+// keep the ENTIRE original value as-is and just append ".2" at the end
+// (e.g. "2.83-dirty" -> "2.83-dirty.2"). This guarantees a 3rd
+// strtok(".") token exists (so CG_ParseDemoVersion() never passes NULL
+// into Q_atoi/strtol), without trying to parse or clean up the original
+// string at all.
+// Returns {newCs, changed, info}.
+function fixModVersion(csBytes) {
+  const cs = bytesToLatin1(csBytes);
+  const key = "\\mod_version\\";
+  const idx = cs.indexOf(key);
+  if (idx === -1) return { newCs: csBytes, changed: false, info: "no mod_version key found" };
+
+  const start = idx + key.length;
+  let end = cs.indexOf("\\", start);
+  if (end === -1) end = cs.length;
+  const oldVal = cs.slice(start, end);
+
+  const parts = oldVal.replace(/^[vV]/, "").split(".");
+  const isAllDigits = (s) => /^[0-9]+$/.test(s);
+
+  if (parts.length >= 3 && isAllDigits(parts[0]) && isAllDigits(parts[1]) && isAllDigits(parts[2])) {
+    return { newCs: csBytes, changed: false, info: `mod_version already valid: "${oldVal}"` };
+  }
+
+  const newVal = oldVal + TARGET_MOD_VERSION_SUFFIX;
+
+  const newCsStr = cs.slice(0, start) + newVal + cs.slice(end);
+  return { newCs: latin1ToBytes(newCsStr), changed: true, info: `"${oldVal}" -> "${newVal}"`, oldVal, newVal };
+}
+
+function decodeGamestateBody(bs, events) {
   const configstrings = [];
-
   while (true) {
     const cmd2 = bs.readByte();
     events.push(["byte", cmd2]);
@@ -890,94 +1127,200 @@ function decodeGamestate(msgBytes) {
       const entEvents = readDeltaEntity(bs);
       events.push(["entity", entEvents]);
     } else {
-      throw new Error(
-        `Unexpected command byte (${cmd2}) while decoding the gamestate. ` +
-        `This indicates a bit-level desync: the demo may use entity fields ` +
-        `that differ from official ET:Legacy (a real protocol incompatibility, ` +
-        `not just a version-string issue).`
-      );
+      throw new Error(`gamestate: unexpected cmd2=${cmd2}`);
     }
   }
-
-  events.push(["long", bs.readLong()]);  // clientNum
-  events.push(["long", bs.readLong()]);  // checksumFeed
-  events.push(["byte", bs.readByte()]);  // final svc_EOF
-
-  return { events, configstrings };
+  events.push(["long", bs.readLong()]); // clientNum
+  events.push(["long", bs.readLong()]); // checksumFeed
+  return configstrings;
 }
 
-function encodeGamestate(events) {
-  const bs = new BitStream(new Uint8Array(0));
-  for (const ev of events) {
-    const kind = ev[0];
-    if (kind === "long") bs.writeLong(ev[1]);
-    else if (kind === "byte") bs.writeByte(ev[1]);
-    else if (kind === "short") bs.writeShort(ev[1]);
-    else if (kind === "string") bs.writeStringBytes(ev[1]);
-    else if (kind === "bits") bs.writeBits(ev[2], ev[1]);
-    else if (kind === "entity") writeDeltaEntity(bs, ev[1]);
-    else throw new Error(`Unknown event type: ${kind}`);
+function encodeGamestateBody(bs, events, idx) {
+  while (true) {
+    let ev = events[idx++];
+    const cmd2 = ev[1];
+    bs.writeByte(cmd2);
+    if (cmd2 === SVC_EOF) {
+      break;
+    } else if (cmd2 === SVC_CONFIGSTRING) {
+      ev = events[idx++]; bs.writeShort(ev[1]);
+      ev = events[idx++]; bs.writeStringBytes(ev[1]);
+    } else if (cmd2 === SVC_BASELINE) {
+      ev = events[idx++]; bs.writeBits(ev[2], ev[1]);
+      ev = events[idx++]; writeDeltaEntity(bs, ev[1]);
+    }
   }
-  const nbytes = (bs.bio.bit + 7) >> 3;
-  return new Uint8Array(bs.bio.data.slice(0, nbytes));
+  let ev = events[idx++]; bs.writeLong(ev[1]);
+  ev = events[idx++]; bs.writeLong(ev[1]);
+  return idx;
 }
 
-function bytesToLatin1(bytes) {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return s;
+function decodeSnapshotBody(bs, events) {
+  events.push(["long", bs.readLong()]);  // serverTime
+  events.push(["byte", bs.readByte()]);  // deltaNum
+  events.push(["byte", bs.readByte()]);  // snapFlags
+  const arealen = bs.readByte();
+  events.push(["byte", arealen]);
+  if (arealen < 0 || arealen > 64) throw new Error(`snapshot: invalid areamask length ${arealen}`);
+  const area = [];
+  for (let i = 0; i < arealen; i++) area.push(bs.readByte());
+  events.push(["rawbytes", area]);
+  const psEvents = readDeltaPlayerstate(bs);
+  events.push(["playerstate", psEvents]);
+  const entList = [];
+  while (true) {
+    const newnum = bs.readBits(GENTITYNUM_BITS);
+    if (newnum >= MAX_GENTITIES_MINUS_1) { entList.push(["term", newnum]); break; }
+    const entEvents = readDeltaEntity(bs);
+    entList.push(["ent", newnum, entEvents]);
+  }
+  events.push(["entlist", entList]);
 }
-function latin1ToBytes(str) {
-  const out = new Uint8Array(str.length);
-  for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+
+function encodeSnapshotBody(bs, events, idx) {
+  let ev = events[idx++]; bs.writeLong(ev[1]);
+  ev = events[idx++]; bs.writeByte(ev[1]);
+  ev = events[idx++]; bs.writeByte(ev[1]);
+  ev = events[idx++]; const arealen = ev[1]; bs.writeByte(arealen);
+  ev = events[idx++]; for (const b of ev[1]) bs.writeByte(b);
+  ev = events[idx++]; writeDeltaPlayerstate(bs, ev[1]);
+  ev = events[idx++];
+  for (const item of ev[1]) {
+    if (item[0] === "term") {
+      bs.writeBits(item[1], GENTITYNUM_BITS);
+    } else {
+      bs.writeBits(item[1], GENTITYNUM_BITS);
+      writeDeltaEntity(bs, item[2]);
+    }
+  }
+  return idx;
+}
+
+function isCs0Command(s) {
+  // s is a Uint8Array; check if it's a "cs 0 ..." command (configstring
+  // update for index 0, CS_SERVERINFO).
+  const str = bytesToLatin1(s);
+  const parts = str.split(" ");
+  return parts.length >= 2 && parts[0] === "cs" && parts[1] === "0";
+}
+
+function extractQuotedValue(s) {
+  // Given 'cs 0 "\...\..."', return {prefix, value, suffix} (as byte
+  // arrays) so the value can be replaced in place.
+  const str = bytesToLatin1(s);
+  const firstSpace = str.indexOf(" ");
+  const secondSpace = str.indexOf(" ", firstSpace + 1);
+  const rest = secondSpace === -1 ? "" : str.slice(secondSpace + 1);
+  if (rest.startsWith('"') && rest.endsWith('"') && rest.length >= 2) {
+    const prefixLen = str.length - rest.length;
+    return {
+      prefix: latin1ToBytes(str.slice(0, prefixLen) + '"'),
+      value: latin1ToBytes(rest.slice(1, -1)),
+      suffix: latin1ToBytes('"'),
+    };
+  } else {
+    const prefixLen = str.length - rest.length;
+    return { prefix: latin1ToBytes(str.slice(0, prefixLen)), value: latin1ToBytes(rest), suffix: new Uint8Array(0) };
+  }
+}
+
+function concatBytes(...arrs) {
+  const total = arrs.reduce((a, b) => a + b.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const a of arrs) { out.set(a, off); off += a.length; }
   return out;
 }
 
-const TARGET_MOD_VERSION = "2.83.2";
+function decodeMessage(msgBytes) {
+  const bs = new BitStream(msgBytes);
+  const events = [];
+  events.push(["long", bs.readLong()]); // reliableAcknowledge
 
-// If mod_version doesn't consist of exactly 3 numeric parts
-// (major.minor.patch), replace it outright with a known-good official
-// version string. We do NOT try to salvage digits from the original value
-// (e.g. "2.83-dirty" must NOT become "2.0.0" by discarding the non-numeric
-// "83-dirty" part) -- the actual number is irrelevant for playback, it
-// only needs to satisfy CG_ParseDemoVersion()'s strtok parsing, so a
-// fixed, known-valid string is the safest choice.
-// Returns {newCs, changed, info}.
-function fixModVersion(csBytes) {
-  const cs = bytesToLatin1(csBytes);
-  const key = "\\mod_version\\";
-  const idx = cs.indexOf(key);
-  if (idx === -1) return { newCs: csBytes, changed: false, info: "no mod_version key found" };
+  const patchTargets = []; // {tag: "gamestate_cs"|"cs_command", idx}
 
-  const start = idx + key.length;
-  let end = cs.indexOf("\\", start);
-  if (end === -1) end = cs.length;
-  const oldVal = cs.slice(start, end);
-
-  const stripped = oldVal.replace(/^[vV]/, "");
-  const parts = stripped.split(".");
-
-  const isAllDigits = (s) => /^[0-9]+$/.test(s);
-
-  if (parts.length === 3 && isAllDigits(parts[0]) && isAllDigits(parts[1]) && isAllDigits(parts[2])) {
-    return { newCs: csBytes, changed: false, info: `mod_version already valid: "${oldVal}"` };
+  while (true) {
+    const cmd = bs.readByte();
+    events.push(["byte", cmd]);
+    if (cmd === SVC_EOF) {
+      break;
+    } else if (cmd === SVC_NOP) {
+      // nothing
+    } else if (cmd === SVC_SERVERCOMMAND) {
+      events.push(["long", bs.readLong()]);
+      const s = bs.readStringBytes();
+      events.push(["string", s]);
+      if (isCs0Command(s)) patchTargets.push({ tag: "cs_command", idx: events.length - 1 });
+    } else if (cmd === SVC_GAMESTATE) {
+      events.push(["long", bs.readLong()]); // serverCommandSequence
+      const configstrings = decodeGamestateBody(bs, events);
+      for (const [pos, csnum] of configstrings) {
+        if (csnum === CS_SERVERINFO) patchTargets.push({ tag: "gamestate_cs", idx: pos });
+      }
+      const topEof = bs.readByte(); // top-level message terminator
+      events.push(["byte", topEof]);
+      break;
+    } else if (cmd === SVC_SNAPSHOT) {
+      decodeSnapshotBody(bs, events);
+    } else {
+      throw new Error(`top-level: unexpected/illegible cmd=${cmd}`);
+    }
   }
 
-  const newVal = TARGET_MOD_VERSION;
-
-  const newCsStr = cs.slice(0, start) + newVal + cs.slice(end);
-  return { newCs: latin1ToBytes(newCsStr), changed: true, info: `"${oldVal}" -> "${newVal}"`, oldVal, newVal };
+  return { events, patchTargets };
 }
 
-function patchEvents(events, configstrings, log) {
+function encodeMessage(events) {
+  const bs = new BitStream(new Uint8Array(0));
+  let idx = 0;
+  const nextEv = () => events[idx++];
+
+  let ev = nextEv();
+  bs.writeLong(ev[1]);
+
+  while (true) {
+    ev = nextEv();
+    const cmd = ev[1];
+    bs.writeByte(cmd);
+    if (cmd === SVC_EOF) {
+      break;
+    } else if (cmd === SVC_NOP) {
+      // nothing
+    } else if (cmd === SVC_SERVERCOMMAND) {
+      ev = nextEv(); bs.writeLong(ev[1]);
+      ev = nextEv(); bs.writeStringBytes(ev[1]);
+    } else if (cmd === SVC_GAMESTATE) {
+      ev = nextEv(); bs.writeLong(ev[1]);
+      idx = encodeGamestateBody(bs, events, idx);
+      ev = events[idx++]; bs.writeByte(ev[1]);
+      break;
+    } else if (cmd === SVC_SNAPSHOT) {
+      idx = encodeSnapshotBody(bs, events, idx);
+    } else {
+      throw new Error(`encode: unknown top-level cmd=${cmd}`);
+    }
+  }
+
+  const nbytes = (bs.bio.bit >> 3) + 1;
+  return new Uint8Array(bs.bio.data.slice(0, nbytes));
+}
+
+function patchMessage(events, patchTargets, log) {
   let changed = false;
   let diffInfo = null;
-  for (const [pos, csnum, cs] of configstrings) {
-    if (csnum === CS_SERVERINFO) {
-      const { newCs, changed: didChange, info, oldVal, newVal } = fixModVersion(cs);
-      log(`cs[${csnum}] (CS_SERVERINFO): ${info}`, didChange ? "warn" : "info");
+  for (const { tag, idx } of patchTargets) {
+    const [kind, content] = events[idx];
+    if (tag === "gamestate_cs") {
+      const { newCs, changed: didChange, info, oldVal, newVal } = fixModVersion(content);
+      if (log) log(`gamestate cs[0] (CS_SERVERINFO): ${info}`, didChange ? "warn" : "info");
+      if (didChange) { events[idx] = ["string", newCs]; changed = true; diffInfo = { oldVal, newVal }; }
+    } else if (tag === "cs_command") {
+      const { prefix, value, suffix } = extractQuotedValue(content);
+      const { newCs: newValue, changed: didChange, info, oldVal, newVal } = fixModVersion(value);
+      if (log) log(`'cs 0' command (mid-demo CS_SERVERINFO resend): ${info}`, didChange ? "warn" : "info");
       if (didChange) {
-        events[pos] = ["string", newCs];
+        const newFull = concatBytes(prefix, newValue, suffix);
+        events[idx] = ["string", newFull];
         changed = true;
         diffInfo = { oldVal, newVal };
       }
@@ -986,8 +1329,38 @@ function patchEvents(events, configstrings, log) {
   return { changed, diffInfo };
 }
 
-// Reads a little-endian int32 from a DataView.
-function readI32LE(view, offset) { return view.getInt32(offset, true); }
+/**
+ * Cheaply determines whether a frame's message needs full decode/patch,
+ * without paying the cost of parsing entity/playerstate deltas when it
+ * isn't necessary.
+ *
+ * Relies on a real engine invariant (SV_SendMessageToClient in
+ * sv_snapshot.c): SV_UpdateServerCommandsToClient() always runs before
+ * SV_WriteSnapshotToClient(), so a svc_serverCommand entry can never
+ * appear AFTER a svc_snapshot within the same message. This means once
+ * we see a snapshot (or download) with no matching 'cs 0' command so
+ * far, nothing later in the frame could need patching either, and we
+ * can stop without parsing the (expensive) snapshot body at all.
+ */
+function fastScanFrame(msgBytes) {
+  const bs = new BitStream(msgBytes);
+  bs.readLong(); // reliableAcknowledge
+  while (true) {
+    const cmd = bs.readByte();
+    if (cmd === SVC_EOF) return "none";
+    if (cmd === SVC_NOP) continue;
+    if (cmd === SVC_SERVERCOMMAND) {
+      bs.readLong();
+      const s = bs.readStringBytes();
+      if (isCs0Command(s)) return "needs_patch";
+      continue;
+    }
+    if (cmd === SVC_GAMESTATE) return "gamestate";
+    // svc_snapshot, svc_download, or anything else: no further
+    // serverCommand can follow, nothing left worth patching.
+    return "none";
+  }
+}
 
 async function fixDemoFile(file, log) {
   const buf = new Uint8Array(await file.arrayBuffer());
@@ -998,8 +1371,7 @@ async function fixDemoFile(file, log) {
   const outParts = [];
   let pos = 0;
   let frameIdx = 0;
-  let gamestateCount = 0;
-  let fixedCount = 0;
+  let patchedCount = 0;
   let anyChanged = false;
   let lastDiff = null;
 
@@ -1008,61 +1380,49 @@ async function fixDemoFile(file, log) {
     const length = readI32LE(view, pos + 4);
 
     if (length === -1) {
-      // End-of-demo sentinel frame: no payload follows. Copy the
-      // remainder of the buffer verbatim (normally just these 8 bytes)
-      // and stop.
+      outParts.push(buf.slice(pos));
+      pos = buf.length;
+      break;
+    }
+    if (length < 0 || pos + 8 + length > buf.length) {
+      log(`frame ${frameIdx} (offset ${pos}): corrupt frame length (${length}); ` +
+          `stopping scan, copying the rest through unchanged.`, "warn");
       outParts.push(buf.slice(pos));
       pos = buf.length;
       break;
     }
 
-    if (length < 0 || pos + 8 + length > buf.length) {
-      throw new Error(
-        `Corrupt or unexpected frame at byte offset ${pos} (length=${length}). ` +
-        `Stopping to avoid producing a broken file.`
-      );
-    }
-
     const msgBytes = buf.slice(pos + 8, pos + 8 + length);
 
-    let cmd = null;
-    try { cmd = peekCmd(msgBytes); } catch (e) { /* not decodable; copy through */ }
+    let kind = "none";
+    try { kind = fastScanFrame(msgBytes); } catch (e) { kind = "gamestate"; /* be conservative */ }
 
-    if (cmd === SVC_GAMESTATE) {
-      gamestateCount++;
-      let decoded;
-      try {
-        decoded = decodeGamestate(msgBytes);
-      } catch (e) {
-        log(`frame ${frameIdx} (offset ${pos}): looked like a gamestate but failed to decode (${e.message}); copying through unchanged.`, "warn");
-        outParts.push(buf.slice(pos, pos + 8 + length));
-        pos += 8 + length;
-        frameIdx++;
-        continue;
-      }
-
-      log(`frame ${frameIdx} (offset ${pos}): svc_gamestate found`, "info");
-      const { events, configstrings } = decoded;
-      const { changed, diffInfo } = patchEvents(events, configstrings, log);
-
-      if (changed) {
-        const newMsgBytes = encodeGamestate(events);
-        decodeGamestate(newMsgBytes); // sanity round-trip check before using it
-        const newHeader = new Uint8Array(8);
-        const nv = new DataView(newHeader.buffer);
-        nv.setInt32(0, seq, true);
-        nv.setInt32(4, newMsgBytes.length, true);
-        outParts.push(newHeader, newMsgBytes);
-        fixedCount++;
-        anyChanged = true;
-        if (diffInfo) lastDiff = diffInfo;
-      } else {
-        outParts.push(buf.slice(pos, pos + 8 + length));
-      }
-    } else {
-      // Not a gamestate frame (snapshot, server command, etc.): copy
-      // through unchanged, no need to touch it.
+    if (kind === "none") {
       outParts.push(buf.slice(pos, pos + 8 + length));
+    } else {
+      try {
+        const { events, patchTargets } = decodeMessage(msgBytes);
+        const { changed, diffInfo } = patchMessage(events, patchTargets,
+          (msg, level) => log(`frame ${frameIdx} (offset ${pos}): ${msg}`, level));
+
+        if (changed) {
+          const newMsgBytes = encodeMessage(events);
+          decodeMessage(newMsgBytes); // sanity round-trip check
+          const newHeader = new Uint8Array(8);
+          const nv = new DataView(newHeader.buffer);
+          nv.setInt32(0, seq, true);
+          nv.setInt32(4, newMsgBytes.length, true);
+          outParts.push(newHeader, newMsgBytes);
+          patchedCount++;
+          anyChanged = true;
+          if (diffInfo) lastDiff = diffInfo;
+        } else {
+          outParts.push(buf.slice(pos, pos + 8 + length));
+        }
+      } catch (e) {
+        log(`frame ${frameIdx} (offset ${pos}): failed to parse/patch (${e.message}); copying through unchanged.`, "warn");
+        outParts.push(buf.slice(pos, pos + 8 + length));
+      }
     }
 
     pos += 8 + length;
@@ -1071,7 +1431,7 @@ async function fixDemoFile(file, log) {
 
   if (pos < buf.length) outParts.push(buf.slice(pos));
 
-  log(`Scanned ${frameIdx} frame(s), found ${gamestateCount} gamestate message(s), fixed ${fixedCount} of them.`, "info");
+  log(`Scanned ${frameIdx} frame(s), patched ${patchedCount} of them.`, "info");
 
   if (!anyChanged) {
     log("No mod_version formatting issue detected anywhere in the file.", "info");
