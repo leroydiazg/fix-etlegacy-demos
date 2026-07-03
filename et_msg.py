@@ -11,6 +11,9 @@ FLOAT_INT_BITS = 13
 FLOAT_INT_BIAS = 1 << (FLOAT_INT_BITS - 1)
 
 
+_shared_huff_cache = None
+
+
 def new_msg_huff():
     """Creates a fresh Huffman tree seeded exactly like MSG_initHuffman()."""
     huff = Huff()
@@ -21,6 +24,21 @@ def new_msg_huff():
     return huff
 
 
+def get_shared_huff():
+    """
+    Returns a process-wide cached Huffman tree. The tree is never mutated
+    once built (MSG_ReadBits/MSG_WriteBits never call Huff_addRef -- see
+    et_huffman.py), so it is always safe to reuse the same instance across
+    many independent BitStream decode/encode calls instead of rebuilding
+    it (over 1,000,000 addRef operations) every time. This matters a lot
+    when scanning every frame of a large demo file.
+    """
+    global _shared_huff_cache
+    if _shared_huff_cache is None:
+        _shared_huff_cache = new_msg_huff()
+    return _shared_huff_cache
+
+
 class BitStream:
     """
     Wraps BitIO + a Huffman tree, replicating MSG_ReadBits/MSG_WriteBits
@@ -28,7 +46,7 @@ class BitStream:
     """
     def __init__(self, data=b'', huff=None):
         self.bio = BitIO(data)
-        self.huff = huff if huff is not None else new_msg_huff()
+        self.huff = huff if huff is not None else get_shared_huff()
         self.maxbits = len(data) * 8  # updated if more space is needed
 
     def _ensure_capacity(self, extra_bits):
